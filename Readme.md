@@ -54,8 +54,8 @@ The plugin developer is not responsible for the privacy practices or content of 
 Before configuring the plugin, you must create an OAuth2 application in your Infomaniak space:
 
 1. Log into your Infomaniak account
-2. Access the API and applications management section
-3. Create a new OAuth2 application
+2. Access the Cloud Computing > Auth product page: https://manager.infomaniak.com/v3/ng/products/cloud/ik-auth
+3. Create a new application
 4. Note the client ID and client secret that will be provided to you
 5. Configure the redirect URL to: `https://your-site.com/openid-connect-authorize`
 
