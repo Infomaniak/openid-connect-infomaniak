@@ -271,6 +271,22 @@ class OpenID_Connect_Infomaniak_Settings_Page {
                 'readonly'    => true,
 				'section'     => 'client_settings',
 			),
+			'endpoint_jwks'    => array(
+				'title'       => __( 'JWKS Endpoint URL', 'infomaniak-connect-openid' ),
+				'description' => __( 'Identity provider JWKS endpoint for JWT signature verification.', 'infomaniak-connect-openid' ),
+				'type'        => 'text',
+				'disabled'    => true,
+				'readonly'    => true,
+				'section'     => 'client_settings',
+			),
+			'issuer'    => array(
+				'title'       => __( 'Issuer URL', 'infomaniak-connect-openid' ),
+				'description' => __( 'The expected issuer for JWT validation. Used to verify the iss claim in ID tokens.', 'infomaniak-connect-openid' ),
+				'type'        => 'text',
+				'disabled'    => true,
+				'readonly'    => true,
+				'section'     => 'client_settings',
+			),
             /*
 			'endpoint_end_session'    => array(
 				'title'       => __( 'End Session Endpoint URL', 'infomaniak-connect-openid' ),

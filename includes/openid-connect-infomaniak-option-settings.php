@@ -34,6 +34,10 @@ if ( ! defined( 'ABSPATH' ) ) exit;
  * @property string $endpoint_userinfo    The IDP User information endpoint URL.
  * @property string $endpoint_token       The IDP token validation endpoint URL.
  * @property string $endpoint_end_session The IDP logout endpoint URL.
+ * @property string $endpoint_jwks        The IDP JWKS endpoint URL for JWT signature verification.
+ * @property string $issuer               The expected issuer for JWT validation.
+ * @property int    $jwks_cache_ttl       The JWKS cache TTL in seconds.
+ * @property bool   $allow_internal_idp   The flag to allow HTTP requests to internal/private networks.
  * @property string $acr_values           The Authentication contract as defined on the IDP.
  *
  * Non-standard Settings:
@@ -94,9 +98,12 @@ class OpenID_Connect_Infomaniak_Option_Settings {
 		'endpoint_login'            => 'INFOMANIAK_OIDC_ENDPOINT_LOGIN_URL',
 		'endpoint_token'            => 'INFOMANIAK_OIDC_ENDPOINT_TOKEN_URL',
 		'endpoint_userinfo'         => 'INFOMANIAK_OIDC_ENDPOINT_USERINFO_URL',
+		'endpoint_jwks'             => 'INFOMANIAK_OIDC_ENDPOINT_JWKS_URL',
+		'issuer'                    => 'INFOMANIAK_OIDC_ISSUER',
 		'login_type'                => 'INFOMANIAK_OIDC_LOGIN_TYPE',
 		'scope'                     => 'INFOMANIAK_OIDC_CLIENT_SCOPE',
         'acr_values'                => 'INFOMANIAK_OIDC_ACR_VALUES',
+		'allow_internal_idp'        => 'OIDC_ALLOW_INTERNAL_IDP',
 		'create_if_does_not_exist'  => 'OIDC_CREATE_IF_DOES_NOT_EXIST',
 		'enforce_privacy'           => 'OIDC_ENFORCE_PRIVACY',
 		'link_existing_users'       => 'OIDC_LINK_EXISTING_USERS',

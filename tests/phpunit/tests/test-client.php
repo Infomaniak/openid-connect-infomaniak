@@ -26,6 +26,10 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
         'endpoint_token' => 'https://login.example.com/token',
         'redirect_uri' => 'https://example.com/redirect',
         'acr_values' => 'test-acr',
+        'endpoint_jwks' => '',
+        'issuer' => '',
+        'jwks_cache_ttl' => 3600,
+        'allow_internal_idp' => false,
         'state_time_limit' => 180,
     ];
 
@@ -48,6 +52,10 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
             $this->config['endpoint_token'],
             $this->config['redirect_uri'],
             $this->config['acr_values'],
+            $this->config['endpoint_jwks'],
+            $this->config['issuer'],
+            $this->config['jwks_cache_ttl'],
+            $this->config['allow_internal_idp'],
             $this->config['state_time_limit'],
             $this->mock_logger
         );
@@ -112,7 +120,7 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
         
         $result = $this->client->validate_authentication_request($request);
         $this->assertWPError($result);
-        $this->assertEquals('unknown-error', $result->get_error_code());
+        $this->assertEquals('test-error', $result->get_error_code());
     }
 
     /**
@@ -257,7 +265,11 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
     public function test_validate_id_token_claim_valid() {
         $id_token_claim = [
             'sub' => '1234567890',
-            'name' => 'Test User'
+            'name' => 'Test User',
+            'exp' => time() + 3600,
+            'iat' => time(),
+            'aud' => $this->config['client_id'],
+            'iss' => 'https://login.example.com',
         ];
         
         $result = $this->client->validate_id_token_claim($id_token_claim);

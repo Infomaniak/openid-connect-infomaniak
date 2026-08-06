@@ -152,6 +152,10 @@ class OpenID_Connect_Infomaniak {
 			$this->settings->endpoint_token,
 			$this->get_redirect_uri( $this->settings ),
 			$this->settings->acr_values,
+			$this->settings->endpoint_jwks,
+			$this->settings->issuer,
+			$this->settings->jwks_cache_ttl,
+			$this->settings->allow_internal_idp,
 			$this->get_state_time_limit( $this->settings ),
 			$this->logger
 		);
@@ -373,6 +377,10 @@ class OpenID_Connect_Infomaniak {
 				'endpoint_userinfo'    => defined( 'INFOMANIAK_OIDC_ENDPOINT_USERINFO_URL' ) ? INFOMANIAK_OIDC_ENDPOINT_USERINFO_URL : '',
 				'endpoint_token'       => defined( 'INFOMANIAK_OIDC_ENDPOINT_TOKEN_URL' ) ? INFOMANIAK_OIDC_ENDPOINT_TOKEN_URL : '',
 				'endpoint_end_session' => defined( 'INFOMANIAK_OIDC_ENDPOINT_LOGOUT_URL' ) ? INFOMANIAK_OIDC_ENDPOINT_LOGOUT_URL : '',
+				'endpoint_jwks'        => defined( 'INFOMANIAK_OIDC_ENDPOINT_JWKS_URL' ) ? INFOMANIAK_OIDC_ENDPOINT_JWKS_URL : '',
+				'issuer'               => defined( 'INFOMANIAK_OIDC_ISSUER' ) ? INFOMANIAK_OIDC_ISSUER : '',
+				'jwks_cache_ttl'       => defined( 'INFOMANIAK_OIDC_JWKS_CACHE_TTL' ) ? intval( INFOMANIAK_OIDC_JWKS_CACHE_TTL ) : 3600,
+				'allow_internal_idp'   => defined( 'OIDC_ALLOW_INTERNAL_IDP' ) ? intval( OIDC_ALLOW_INTERNAL_IDP ) : 0,
 				'acr_values'           => defined( 'INFOMANIAK_OIDC_ACR_VALUES' ) ? INFOMANIAK_OIDC_ACR_VALUES : '',
 
 				// Non-standard settings.
@@ -432,6 +440,10 @@ define('INFOMANIAK_OIDC_ENDPOINT_LOGIN_URL', 'https://login.infomaniak.com/autho
 define('INFOMANIAK_OIDC_ENDPOINT_USERINFO_URL', 'https://login.infomaniak.com/oauth2/userinfo');
 // endpoint_token
 define('INFOMANIAK_OIDC_ENDPOINT_TOKEN_URL', 'https://login.infomaniak.com/token');
+// endpoint_jwks
+define('INFOMANIAK_OIDC_ENDPOINT_JWKS_URL', 'https://login.infomaniak.com/oauth2/jwks');
+// issuer
+define('INFOMANIAK_OIDC_ISSUER', 'https://login.infomaniak.com');
 
 OpenID_Connect_Infomaniak::instance();
 

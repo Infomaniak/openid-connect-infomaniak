@@ -243,6 +243,7 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		);
 
 		$url = apply_filters( 'infomaniak-connect-openid-auth-url', $url );
+		$url = esc_url_raw( $url );
 		$this->logger->log( $url, 'make_authentication_url' );
 		return $url;
 	}
@@ -414,8 +415,17 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$request['timeout'] = intval( $this->settings->http_request_timeout );
 		}
 
-		if ( $this->settings->no_sslverify ) {
+		// Only allow SSL bypass in local development environments.
+		if (
+			$this->settings->no_sslverify
+			&& defined( 'WP_DEBUG' ) && WP_DEBUG === true
+			&& ( ! defined( 'WP_ENVIRONMENT_TYPE' ) || WP_ENVIRONMENT_TYPE === 'local' )
+		) {
 			$request['sslverify'] = false;
+			$this->logger->log(
+				'SSL verification disabled - ONLY for development. NEVER use in production!',
+				'ssl-bypass-warning'
+			);
 		}
 
 		return $request;
@@ -566,7 +576,10 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 
 		// Provide backwards compatibility for customization using the deprecated cookie method.
 		if ( ! empty( $_COOKIE[ $this->cookie_redirect_key ] ) ) {
-			$redirect_url = esc_url_raw( wp_unslash( $_COOKIE[ $this->cookie_redirect_key ] ) );
+			$redirect_url = wp_validate_redirect(
+				esc_url_raw( wp_unslash( $_COOKIE[ $this->cookie_redirect_key ] ) ),
+				home_url()
+			);
 		}
 
 		// Only do redirect-user-back action hook when the plugin is configured for it.
@@ -898,6 +911,13 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		 * and each possible issuer in the config.
 		 */
 		$jwt = $src['JWT'];
+
+		// Legacy JWT decoding without signature verification (INSECURE).
+		$this->logger->log(
+			'SECURITY WARNING: Aggregated claim JWT signatures are NOT being verified. This is a potential security vulnerability.',
+			'aggregated-jwt-not-verified'
+		);
+
 		list ( $header, $body, $rest ) = explode( '.', $jwt, 3 );
 		$body_str = base64_decode( $body, false );
 		if ( ! $body_str ) {
