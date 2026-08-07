@@ -314,11 +314,12 @@ class OpenID_Connect_Infomaniak_Client {
 	/**
 	 * Using the authorization_code, request an authentication token from the IDP.
 	 *
-	 * @param string|WP_Error $code The authorization code.
+	 * @param string|WP_Error $code          The authorization code.
+	 * @param string         $code_verifier Optional. The PKCE code_verifier.
 	 *
 	 * @return array<mixed>|WP_Error
 	 */
-	public function request_authentication_token( $code ) {
+	public function request_authentication_token( $code, $code_verifier = '' ) {
 
 		// Add Host header - required for when the openid-connect endpoint is behind a reverse-proxy.
 		$parsed_url = wp_parse_url( $this->endpoint_token );
@@ -335,6 +336,10 @@ class OpenID_Connect_Infomaniak_Client {
 			),
 			'headers' => array( 'Host' => $host ),
 		);
+
+		if ( ! empty( $code_verifier ) ) {
+			$request['body']['code_verifier'] = $code_verifier;
+		}
 
 		if ( ! empty( $this->acr_values ) ) {
 			$request['body'] += array( 'acr_values' => $this->acr_values );
@@ -475,6 +480,9 @@ class OpenID_Connect_Infomaniak_Client {
 	/**
 	 * Generate a new state, save it as a transient, and return the state hash.
 	 *
+	 * Stores a PKCE code_verifier alongside the redirect_to so it can be
+	 * retrieved and sent during the token exchange.
+	 *
 	 * @param string $redirect_to The redirect URL to be used after IDP authentication.
 	 *
 	 * @return string
@@ -484,13 +492,72 @@ class OpenID_Connect_Infomaniak_Client {
 		$state = bin2hex( random_bytes( 16 ) );
 		$state_value = array(
 			$state => array(
-				'redirect_to' => $redirect_to,
+				'redirect_to'   => $redirect_to,
+				'code_verifier' => $this->generate_code_verifier(),
+				'nonce'         => bin2hex( random_bytes( 16 ) ),
 			),
 		);
 
 		set_transient( 'infomaniak-connect-openid-state--' . $state, $state_value, $this->state_time_limit );
 
 		return $state;
+	}
+
+	/**
+	 * Generate a cryptographically secure PKCE code_verifier.
+	 *
+	 * Per RFC 7636, the code_verifier is a high-entropy random string
+	 * of 43-128 characters from the unreserved set.
+	 *
+	 * @return string
+	 */
+	public function generate_code_verifier() {
+		return rtrim( strtr( base64_encode( random_bytes( 32 ) ), '+/', '-_' ), '=' );
+	}
+
+	/**
+	 * Compute the PKCE code_challenge from a code_verifier using S256.
+	 *
+	 * @param string $code_verifier The PKCE code_verifier.
+	 *
+	 * @return string
+	 */
+	public function generate_code_challenge( $code_verifier ) {
+		return rtrim( strtr( base64_encode( hash( 'sha256', $code_verifier, true ) ), '+/', '-_' ), '=' );
+	}
+
+	/**
+	 * Retrieve the PKCE code_verifier stored with a given state.
+	 *
+	 * @param string $state The state hash.
+	 *
+	 * @return string|false The code_verifier or false if not found.
+	 */
+	public function get_code_verifier( $state ) {
+		$state_object = get_transient( 'infomaniak-connect-openid-state--' . $state );
+
+		if ( ! is_array( $state_object ) || ! isset( $state_object[ $state ]['code_verifier'] ) ) {
+			return false;
+		}
+
+		return $state_object[ $state ]['code_verifier'];
+	}
+
+	/**
+	 * Retrieve the nonce stored with a given state.
+	 *
+	 * @param string $state The state hash.
+	 *
+	 * @return string|false The nonce or false if not found.
+	 */
+	public function get_nonce( $state ) {
+		$state_object = get_transient( 'infomaniak-connect-openid-state--' . $state );
+
+		if ( ! is_array( $state_object ) || ! isset( $state_object[ $state ]['nonce'] ) ) {
+			return false;
+		}
+
+		return $state_object[ $state ]['nonce'];
 	}
 
 	/**
@@ -658,11 +725,12 @@ class OpenID_Connect_Infomaniak_Client {
 	/**
 	 * Ensure the id_token_claim contains the required values.
 	 *
-	 * @param array $id_token_claim The ID token claim.
+	 * @param array  $id_token_claim The ID token claim.
+	 * @param string $expected_nonce Optional. The expected nonce from the auth request.
 	 *
 	 * @return bool|WP_Error
 	 */
-	public function validate_id_token_claim( $id_token_claim ) {
+	public function validate_id_token_claim( $id_token_claim, $expected_nonce = '' ) {
 		if ( ! is_array( $id_token_claim ) ) {
 			return new WP_Error( 'bad-id-token-claim', __( 'Bad ID token claim.', 'infomaniak-connect-openid' ), $id_token_claim );
 		}
@@ -727,6 +795,17 @@ class OpenID_Connect_Infomaniak_Client {
 					__( 'Token issuer does not match expected issuer.', 'infomaniak-connect-openid' ),
 					$id_token_claim
 				);
+			}
+		}
+
+		// Validate nonce when one was sent in the auth request.
+		if ( ! empty( $expected_nonce ) ) {
+			if ( ! isset( $id_token_claim['nonce'] ) ) {
+				return new WP_Error( 'missing-nonce', __( 'Token missing nonce claim.', 'infomaniak-connect-openid' ), $id_token_claim );
+			}
+
+			if ( $id_token_claim['nonce'] !== $expected_nonce ) {
+				return new WP_Error( 'invalid-nonce', __( 'Token nonce does not match expected value.', 'infomaniak-connect-openid' ), $id_token_claim );
 			}
 		}
 

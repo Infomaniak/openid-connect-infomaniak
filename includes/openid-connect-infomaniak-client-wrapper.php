@@ -226,9 +226,22 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$separator = '&';
 		}
 
-		$url_format = '%1$s%2$sresponse_type=code&scope=%3$s&client_id=%4$s&state=%5$s&redirect_uri=%6$s';
+		// Generate the state (stores redirect_to, code_verifier, and nonce).
+		$state = $this->client->new_state( $atts['redirect_to'] );
+
+		// Compute the PKCE code_challenge from the stored code_verifier.
+		$code_verifier = $this->client->get_code_verifier( $state );
+		$code_challenge = $code_verifier ? $this->client->generate_code_challenge( $code_verifier ) : '';
+
+		// Retrieve the nonce stored with the state.
+		$nonce = $this->client->get_nonce( $state );
+		if ( ! is_string( $nonce ) ) {
+			$nonce = '';
+		}
+
+		$url_format = '%1$s%2$sresponse_type=code&scope=%3$s&client_id=%4$s&state=%5$s&redirect_uri=%6$s&code_challenge=%7$s&code_challenge_method=S256&nonce=%8$s';
 		if ( ! empty( $atts['acr_values'] ) ) {
-			$url_format .= '&acr_values=%7$s';
+			$url_format .= '&acr_values=%9$s';
 		}
 
 		$url = sprintf(
@@ -237,8 +250,10 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$separator,
 			rawurlencode( $atts['scope'] ),
 			rawurlencode( $atts['client_id'] ),
-			$this->client->new_state( $atts['redirect_to'] ),
+			$state,
 			rawurlencode( $atts['redirect_uri'] ),
+			rawurlencode( $code_challenge ),
+			rawurlencode( $nonce ),
 			rawurlencode( $atts['acr_values'] )
 		);
 
@@ -462,7 +477,8 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		}
 
 		// Attempting to exchange an authorization code for an authentication token.
-		$token_result = $client->request_authentication_token( $code );
+		$code_verifier = $client->get_code_verifier( $state );
+		$token_result = $client->request_authentication_token( $code, $code_verifier );
 
 		if ( is_wp_error( $token_result ) ) {
 			$this->error_redirect( $token_result );
@@ -500,7 +516,8 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		}
 
 		// Validate our id_token has required values.
-		$valid = $client->validate_id_token_claim( $id_token_claim );
+		$expected_nonce = $client->get_nonce( $state );
+		$valid = $client->validate_id_token_claim( $id_token_claim, $expected_nonce );
 
 		if ( is_wp_error( $valid ) ) {
 			$this->error_redirect( $valid );
