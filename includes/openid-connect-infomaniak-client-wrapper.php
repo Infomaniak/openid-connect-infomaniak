@@ -453,6 +453,31 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 	}
 
 	/**
+	 * Get the authentication request from the $_GET superglobal, sanitized.
+	 *
+	 * Applies wp_unslash() to the full array and sanitize_text_field() to the
+	 * security-relevant `code` and `state` fields before they reach the client.
+	 *
+	 * The `error` and `error_description` fields are intentionally not sanitized
+	 * here; they are handled at the point of use in validate_authentication_request().
+	 *
+	 * @return array<string,mixed>
+	 */
+	public function get_authentication_request() {
+		$request = wp_unslash( $_GET );
+
+		if ( isset( $request['code'] ) ) {
+			$request['code'] = sanitize_text_field( $request['code'] );
+		}
+
+		if ( isset( $request['state'] ) ) {
+			$request['state'] = sanitize_text_field( $request['state'] );
+		}
+
+		return $request;
+	}
+
+	/**
 	 * Control the authentication and subsequent authorization of the user when
 	 * returning from the IDP.
 	 *
@@ -462,7 +487,7 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		$client = $this->client;
 
 		// Start the authentication flow.
-		$authentication_request = $client->validate_authentication_request( $_GET );
+		$authentication_request = $client->validate_authentication_request( $this->get_authentication_request() );
 
 		if ( is_wp_error( $authentication_request ) ) {
 			$this->error_redirect( $authentication_request );
