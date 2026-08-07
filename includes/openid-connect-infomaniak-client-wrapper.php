@@ -863,6 +863,10 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 	 * Checks if $claimname is in the body or _claim_names of the userinfo.
 	 * If yes, returns the claim value. Otherwise, returns false.
 	 *
+	 * Aggregated claim JWTs are signature-verified via JWKS before their
+	 * claims are used. If JWKS is not configured or verification fails, the
+	 * claim is rejected.
+	 *
 	 * @param string $claimname the claim name to look for.
 	 * @param array  $userinfo the JSON to look in.
 	 * @param string $claimvalue the source claim value ( from the body of the JWT of the claim source).
@@ -903,34 +907,18 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		if ( ! array_key_exists( 'JWT', $src ) ) {
 			return false;
 		}
-		/**
-		 * Extract claim from JWT.
-		 * FIXME: We probably want to verify the JWT signature/issuer here.
-		 * For example, using JWKS if applicable. For symmetrically signed
-		 * JWTs (HMAC), we need a way to specify the acceptable secrets
-		 * and each possible issuer in the config.
-		 */
 		$jwt = $src['JWT'];
 
-		// Legacy JWT decoding without signature verification (INSECURE).
-		$this->logger->log(
-			'SECURITY WARNING: Aggregated claim JWT signatures are NOT being verified. This is a potential security vulnerability.',
-			'aggregated-jwt-not-verified'
-		);
+		// Verify the aggregated claim JWT signature and issuer via JWKS.
+		$claims = $this->client->verify_and_decode_jwt( $jwt );
+		if ( is_wp_error( $claims ) ) {
+			return false;
+		}
 
-		list ( $header, $body, $rest ) = explode( '.', $jwt, 3 );
-		$body_str = base64_decode( $body, false );
-		if ( ! $body_str ) {
+		if ( ! array_key_exists( $claimname, $claims ) ) {
 			return false;
 		}
-		$body_json = json_decode( $body_str, true );
-		if ( ! isset( $body_json ) ) {
-			return false;
-		}
-		if ( ! array_key_exists( $claimname, $body_json ) ) {
-			return false;
-		}
-		$claimvalue = $body_json[ $claimname ];
+		$claimvalue = $claims[ $claimname ];
 		return true;
 	}
 

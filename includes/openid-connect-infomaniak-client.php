@@ -608,6 +608,54 @@ class OpenID_Connect_Infomaniak_Client {
 	}
 
 	/**
+	 * Verify and decode an arbitrary JWT (e.g. an aggregated claim JWT)
+	 * using JWKS signature verification and issuer validation.
+	 *
+	 * Unlike get_id_token_claim(), this does not enforce ID token-specific
+	 * claims (aud, exp, iat, sub). Refuses to proceed when JWKS is not
+	 * configured so unverified tokens are never accepted.
+	 *
+	 * @param string $jwt The JWT to verify and decode.
+	 *
+	 * @return array|WP_Error Array of claims if valid, WP_Error on failure.
+	 */
+	public function verify_and_decode_jwt( $jwt ) {
+		if ( empty( $this->endpoint_jwks ) ) {
+			$this->logger->log(
+				'SECURITY WARNING: JWKS endpoint not configured. Refusing to decode aggregated claim JWT without signature verification.',
+				'jwks-not-configured'
+			);
+			return new WP_Error(
+				'jwks-not-configured',
+				__( 'JWKS endpoint is not configured. JWT signature verification is required.', 'infomaniak-connect-openid' ),
+				$jwt
+			);
+		}
+
+		$issuer = ! empty( $this->issuer )
+			? $this->issuer
+			: $this->get_issuer_from_endpoint( $this->endpoint_login );
+
+		$jwt_validator = new OpenID_Connect_Infomaniak_JWT_Validator(
+			$this->endpoint_jwks,
+			$this->client_id,
+			$issuer,
+			$this->jwks_cache_ttl,
+			$this->allow_internal_idp,
+			$this->logger
+		);
+
+		$claims = $jwt_validator->verify_and_decode_jwt( $jwt );
+
+		if ( is_wp_error( $claims ) ) {
+			$this->logger->log( $claims, 'aggregated-jwt-verification-failed' );
+			return $claims;
+		}
+
+		return $claims;
+	}
+
+	/**
 	 * Ensure the id_token_claim contains the required values.
 	 *
 	 * @param array $id_token_claim The ID token claim.
