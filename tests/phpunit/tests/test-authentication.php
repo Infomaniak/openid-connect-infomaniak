@@ -464,4 +464,221 @@ class Test_Authentication extends Infomaniak_OpenID_Connect_TestCase {
         // Should return the original redirect URL when no token response is found
         $this->assertEquals('https://example.com/redirect', $result);
     }
+
+    /**
+     * Helper to run authentication_request_callback and capture the redirect target.
+     *
+     * Hooks wp_redirect to capture the location, then throws to prevent exit.
+     *
+     * @param array $get         The $_GET superglobal for the callback.
+     * @param array $cookie      The $_COOKIE superglobal for the callback.
+     * @param array $state_value  State transient value to set up.
+     * @return string The captured redirect location.
+     */
+    private function capture_callback_redirect( $get, $cookie, $state_value ) {
+        // Set up the state transient.
+        $state = $get['state'];
+        set_transient( 'infomaniak-connect-openid-state--' . $state, $state_value, 180 );
+
+        // Set the $_GET and $_COOKIE superglobals.
+        $_GET = $get;
+        $_COOKIE = $cookie;
+
+        $captured = null;
+        $capture = function ( $location ) use ( &$captured ) {
+            $captured = $location;
+            throw new \RuntimeException( 'redirect_intercepted' );
+        };
+        add_filter( 'wp_redirect', $capture );
+
+        try {
+            $this->client_wrapper->authentication_request_callback();
+        } catch ( \RuntimeException $e ) {
+            // Expected: thrown to prevent exit() after wp_redirect().
+        }
+
+        remove_filter( 'wp_redirect', $capture );
+        $_GET = array();
+        $_COOKIE = array();
+
+        return $captured;
+    }
+
+    /**
+     * Set up a fully mocked client wrapper for the full authentication callback.
+     *
+     * @param WP_User $user The user that will be found by identity.
+     */
+    private function setup_mocked_callback( $user ) {
+        // Set user meta so get_user_by_identity finds this user.
+        update_user_meta( $user->ID, 'infomaniak-connect-openid-subject-identity', 'test-subject-123' );
+
+        // Mock client methods to walk through the full callback.
+        $auth_request = array( 'code' => 'auth-code', 'state' => 'test-state-abc' );
+        $this->mock_client->method( 'validate_authentication_request' )->willReturn( $auth_request );
+        $this->mock_client->method( 'get_authentication_code' )->willReturn( 'auth-code' );
+        $this->mock_client->method( 'get_authentication_state' )->willReturn( 'test-state-abc' );
+        $this->mock_client->method( 'request_authentication_token' )->willReturn( array( 'body' => '{}' ) );
+        $this->mock_client->method( 'get_token_response' )->willReturn(
+            array(
+                'id_token'     => 'id-token',
+                'token_type'   => 'Bearer',
+                'access_token' => 'access-token',
+            )
+        );
+        $this->mock_client->method( 'validate_token_response' )->willReturn( true );
+        $this->mock_client->method( 'get_id_token_claim' )->willReturn(
+            array(
+                'iss' => 'https://login.infomaniak.com',
+                'sub' => 'test-subject-123',
+                'aud' => 'client_id',
+                'exp' => time() + 3600,
+                'iat' => time(),
+            )
+        );
+        $this->mock_client->method( 'validate_id_token_claim' )->willReturn( true );
+        $this->mock_client->method( 'get_user_claim' )->willReturn(
+            array(
+                'sub'  => 'test-subject-123',
+                'email' => $user->user_email,
+            )
+        );
+        $this->mock_client->method( 'validate_user_claim' )->willReturn( true );
+        $this->mock_client->method( 'get_subject_identity' )->willReturn( 'test-subject-123' );
+
+        // Mock settings: no userinfo (use id_token claim), no redirect_user_back.
+        $this->mock_settings->method( '__get' )->willReturnCallback(
+            function ( $key ) {
+                $values = array(
+                    'endpoint_userinfo' => '',
+                    'redirect_user_back' => false,
+                    'link_existing_users' => false,
+                    'create_if_does_not_exist' => false,
+                );
+                return isset( $values[ $key ] ) ? $values[ $key ] : null;
+            }
+        );
+    }
+
+    /**
+     * Final redirect after authentication must use wp_safe_redirect,
+     * blocking redirects to external/attacker-controlled URLs.
+     *
+     * The state transient stores an external URL (simulating a tampered or
+     * injected state). After successful auth, the redirect must fall back to
+     * a safe local URL (home_url), not the external one.
+     */
+    public function test_final_redirect_blocks_external_url() {
+        // Create a real WP user.
+        $user = $this->factory()->user->create_and_get();
+        $this->setup_mocked_callback( $user );
+
+        // State transient contains an external (attacker) redirect URL.
+        $state_value = array(
+            'test-state-abc' => array(
+                'redirect_to' => 'https://evil.com/phishing-page',
+            ),
+        );
+
+        $get = array(
+            'code'  => 'auth-code',
+            'state' => 'test-state-abc',
+        );
+
+        $captured = $this->capture_callback_redirect( $get, array(), $state_value );
+
+        $this->assertNotNull( $captured, 'wp_redirect was not called' );
+        $this->assertStringNotContainsString( 'evil.com', $captured,
+            'External redirect URL must be blocked by wp_safe_redirect' );
+    }
+
+    /**
+     * Final redirect to a local URL (same host) is still allowed.
+     */
+    public function test_final_redirect_allows_local_url() {
+        $user = $this->factory()->user->create_and_get();
+        $this->setup_mocked_callback( $user );
+
+        $local_url = home_url( '/wp-admin/profile.php' );
+        $state_value = array(
+            'test-state-abc' => array(
+                'redirect_to' => $local_url,
+            ),
+        );
+
+        $get = array(
+            'code'  => 'auth-code',
+            'state' => 'test-state-abc',
+        );
+
+        $captured = $this->capture_callback_redirect( $get, array(), $state_value );
+
+        $this->assertNotNull( $captured, 'wp_redirect was not called' );
+        $this->assertEquals( $local_url, $captured );
+    }
+
+    /**
+     * Deprecated cookie-based redirect must NOT override the redirect
+     * stored in the state transient.
+     *
+     * Even when the cookie contains a URL, the state-stored redirect should
+     * take precedence (or the cookie should be ignored entirely).
+     */
+    public function test_cookie_redirect_does_not_override_state() {
+        $user = $this->factory()->user->create_and_get();
+        $this->setup_mocked_callback( $user );
+
+        $state_url = home_url( '/wp-admin/' );
+        $state_value = array(
+            'test-state-abc' => array(
+                'redirect_to' => $state_url,
+            ),
+        );
+
+        $get = array(
+            'code'  => 'auth-code',
+            'state' => 'test-state-abc',
+        );
+
+        // Cookie contains a different URL.
+        $cookie = array(
+            'infomaniak-connect-openid-redirect' => home_url( '/other-page/' ),
+        );
+
+        $captured = $this->capture_callback_redirect( $get, $cookie, $state_value );
+
+        $this->assertNotNull( $captured, 'wp_redirect was not called' );
+        $this->assertEquals( $state_url, $captured,
+            'Cookie redirect must not override the state-stored redirect' );
+    }
+
+    /**
+     * Cookie containing an external URL must not cause an open redirect
+     * even when there is no state-stored redirect.
+     */
+    public function test_cookie_external_url_is_blocked() {
+        $user = $this->factory()->user->create_and_get();
+        $this->setup_mocked_callback( $user );
+
+        // State transient has no redirect_to.
+        $state_value = array(
+            'test-state-abc' => array(),
+        );
+
+        $get = array(
+            'code'  => 'auth-code',
+            'state' => 'test-state-abc',
+        );
+
+        // Cookie contains an external URL.
+        $cookie = array(
+            'infomaniak-connect-openid-redirect' => 'https://evil.com/phishing',
+        );
+
+        $captured = $this->capture_callback_redirect( $get, $cookie, $state_value );
+
+        $this->assertNotNull( $captured, 'wp_redirect was not called' );
+        $this->assertStringNotContainsString( 'evil.com', $captured,
+            'External cookie redirect must be blocked' );
+    }
 }

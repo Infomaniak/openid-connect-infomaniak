@@ -622,20 +622,12 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$redirect_url = $state_object[ $state ]['redirect_to'];
 		}
 
-		// Provide backwards compatibility for customization using the deprecated cookie method.
-		if ( ! empty( $_COOKIE[ $this->cookie_redirect_key ] ) ) {
-			$redirect_url = wp_validate_redirect(
-				esc_url_raw( wp_unslash( $_COOKIE[ $this->cookie_redirect_key ] ) ),
-				home_url()
-			);
-		}
-
 		// Only do redirect-user-back action hook when the plugin is configured for it.
 		if ( $this->settings->redirect_user_back ) {
 			do_action( 'infomaniak-connect-openid-redirect-user-back', $redirect_url, $user );
 		}
 
-		wp_redirect( $redirect_url );
+		wp_safe_redirect( $redirect_url );
 
 		exit;
 	}
