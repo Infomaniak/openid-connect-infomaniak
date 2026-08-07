@@ -596,30 +596,15 @@ class OpenID_Connect_Infomaniak_Client {
 		}
 
 		$this->logger->log(
-			'SECURITY WARNING: JWKS endpoint not configured. JWT signatures are NOT being verified. This is a critical security vulnerability.',
-			'jwks-not-configured-insecure'
+			'SECURITY WARNING: JWKS endpoint not configured. Refusing to decode id_token without signature verification.',
+			'jwks-not-configured'
 		);
 
-		// Legacy JWT decoding without signature verification (INSECURE).
-		$tmp = explode( '.', $token_response['id_token'] );
-
-		if ( ! isset( $tmp[1] ) ) {
-			return new WP_Error( 'missing-identity-token', __( 'Missing identity token.', 'infomaniak-connect-openid' ), $token_response );
-		}
-
-		// Extract the id_token's claims from the token (no signature verification).
-		$id_token_claim = json_decode(
-			base64_decode(
-				str_replace( // Because token is encoded in base64 URL (and not just base64).
-					array( '-', '_' ),
-					array( '+', '/' ),
-					$tmp[1]
-				)
-			),
-			true
+		return new WP_Error(
+			'jwks-not-configured',
+			__( 'JWKS endpoint is not configured. JWT signature verification is required.', 'infomaniak-connect-openid' ),
+			$token_response
 		);
-
-		return $id_token_claim;
 	}
 
 	/**

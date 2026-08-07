@@ -235,10 +235,13 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
     }
 
     /**
-     * Test get_id_token_claim with valid token
+     * Test get_id_token_claim refuses to proceed when JWKS endpoint is not configured.
+     *
+     * Regression test for legacy JWT decoding fallback
+     * without signature verification must return a WP_Error instead of silently
+     * accepting an unsigned token.
      */
-    public function test_get_id_token_claim() {
-        // Create a test token with a sub claim
+    public function test_get_id_token_claim_without_jwks_returns_error() {
         $header = base64_encode(json_encode(['typ' => 'JWT', 'alg' => 'RS256']));
         $payload = base64_encode(json_encode([
             'sub' => '1234567890',
@@ -247,16 +250,15 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
         ]));
         $signature = 'test-signature';
         $token = "$header.$payload.$signature";
-        
+
         $token_response = [
             'id_token' => $token,
             'token_type' => 'Bearer'
         ];
-        
+
         $result = $this->client->get_id_token_claim($token_response);
-        $this->assertIsArray($result);
-        $this->assertEquals('1234567890', $result['sub']);
-        $this->assertEquals('Test User', $result['name']);
+        $this->assertWPError($result);
+        $this->assertEquals('jwks-not-configured', $result->get_error_code());
     }
 
     /**
