@@ -314,11 +314,12 @@ class OpenID_Connect_Infomaniak_Client {
 	/**
 	 * Using the authorization_code, request an authentication token from the IDP.
 	 *
-	 * @param string|WP_Error $code The authorization code.
+	 * @param string|WP_Error $code          The authorization code.
+	 * @param string         $code_verifier Optional. The PKCE code_verifier.
 	 *
 	 * @return array<mixed>|WP_Error
 	 */
-	public function request_authentication_token( $code ) {
+	public function request_authentication_token( $code, $code_verifier = '' ) {
 
 		// Add Host header - required for when the openid-connect endpoint is behind a reverse-proxy.
 		$parsed_url = wp_parse_url( $this->endpoint_token );
@@ -335,6 +336,10 @@ class OpenID_Connect_Infomaniak_Client {
 			),
 			'headers' => array( 'Host' => $host ),
 		);
+
+		if ( ! empty( $code_verifier ) ) {
+			$request['body']['code_verifier'] = $code_verifier;
+		}
 
 		if ( ! empty( $this->acr_values ) ) {
 			$request['body'] += array( 'acr_values' => $this->acr_values );
@@ -475,6 +480,9 @@ class OpenID_Connect_Infomaniak_Client {
 	/**
 	 * Generate a new state, save it as a transient, and return the state hash.
 	 *
+	 * Stores a PKCE code_verifier alongside the redirect_to so it can be
+	 * retrieved and sent during the token exchange.
+	 *
 	 * @param string $redirect_to The redirect URL to be used after IDP authentication.
 	 *
 	 * @return string
@@ -484,13 +492,72 @@ class OpenID_Connect_Infomaniak_Client {
 		$state = bin2hex( random_bytes( 16 ) );
 		$state_value = array(
 			$state => array(
-				'redirect_to' => $redirect_to,
+				'redirect_to'   => $redirect_to,
+				'code_verifier' => $this->generate_code_verifier(),
+				'nonce'         => bin2hex( random_bytes( 16 ) ),
 			),
 		);
 
 		set_transient( 'infomaniak-connect-openid-state--' . $state, $state_value, $this->state_time_limit );
 
 		return $state;
+	}
+
+	/**
+	 * Generate a cryptographically secure PKCE code_verifier.
+	 *
+	 * Per RFC 7636, the code_verifier is a high-entropy random string
+	 * of 43-128 characters from the unreserved set.
+	 *
+	 * @return string
+	 */
+	public function generate_code_verifier() {
+		return rtrim( strtr( base64_encode( random_bytes( 32 ) ), '+/', '-_' ), '=' );
+	}
+
+	/**
+	 * Compute the PKCE code_challenge from a code_verifier using S256.
+	 *
+	 * @param string $code_verifier The PKCE code_verifier.
+	 *
+	 * @return string
+	 */
+	public function generate_code_challenge( $code_verifier ) {
+		return rtrim( strtr( base64_encode( hash( 'sha256', $code_verifier, true ) ), '+/', '-_' ), '=' );
+	}
+
+	/**
+	 * Retrieve the PKCE code_verifier stored with a given state.
+	 *
+	 * @param string $state The state hash.
+	 *
+	 * @return string|false The code_verifier or false if not found.
+	 */
+	public function get_code_verifier( $state ) {
+		$state_object = get_transient( 'infomaniak-connect-openid-state--' . $state );
+
+		if ( ! is_array( $state_object ) || ! isset( $state_object[ $state ]['code_verifier'] ) ) {
+			return false;
+		}
+
+		return $state_object[ $state ]['code_verifier'];
+	}
+
+	/**
+	 * Retrieve the nonce stored with a given state.
+	 *
+	 * @param string $state The state hash.
+	 *
+	 * @return string|false The nonce or false if not found.
+	 */
+	public function get_nonce( $state ) {
+		$state_object = get_transient( 'infomaniak-connect-openid-state--' . $state );
+
+		if ( ! is_array( $state_object ) || ! isset( $state_object[ $state ]['nonce'] ) ) {
+			return false;
+		}
+
+		return $state_object[ $state ]['nonce'];
 	}
 
 	/**
@@ -596,40 +663,74 @@ class OpenID_Connect_Infomaniak_Client {
 		}
 
 		$this->logger->log(
-			'SECURITY WARNING: JWKS endpoint not configured. JWT signatures are NOT being verified. This is a critical security vulnerability.',
-			'jwks-not-configured-insecure'
+			'SECURITY WARNING: JWKS endpoint not configured. Refusing to decode id_token without signature verification.',
+			'jwks-not-configured'
 		);
 
-		// Legacy JWT decoding without signature verification (INSECURE).
-		$tmp = explode( '.', $token_response['id_token'] );
+		return new WP_Error(
+			'jwks-not-configured',
+			__( 'JWKS endpoint is not configured. JWT signature verification is required.', 'infomaniak-connect-openid' ),
+			$token_response
+		);
+	}
 
-		if ( ! isset( $tmp[1] ) ) {
-			return new WP_Error( 'missing-identity-token', __( 'Missing identity token.', 'infomaniak-connect-openid' ), $token_response );
+	/**
+	 * Verify and decode an arbitrary JWT (e.g. an aggregated claim JWT)
+	 * using JWKS signature verification and issuer validation.
+	 *
+	 * Unlike get_id_token_claim(), this does not enforce ID token-specific
+	 * claims (aud, exp, iat, sub). Refuses to proceed when JWKS is not
+	 * configured so unverified tokens are never accepted.
+	 *
+	 * @param string $jwt The JWT to verify and decode.
+	 *
+	 * @return array|WP_Error Array of claims if valid, WP_Error on failure.
+	 */
+	public function verify_and_decode_jwt( $jwt ) {
+		if ( empty( $this->endpoint_jwks ) ) {
+			$this->logger->log(
+				'SECURITY WARNING: JWKS endpoint not configured. Refusing to decode aggregated claim JWT without signature verification.',
+				'jwks-not-configured'
+			);
+			return new WP_Error(
+				'jwks-not-configured',
+				__( 'JWKS endpoint is not configured. JWT signature verification is required.', 'infomaniak-connect-openid' ),
+				$jwt
+			);
 		}
 
-		// Extract the id_token's claims from the token (no signature verification).
-		$id_token_claim = json_decode(
-			base64_decode(
-				str_replace( // Because token is encoded in base64 URL (and not just base64).
-					array( '-', '_' ),
-					array( '+', '/' ),
-					$tmp[1]
-				)
-			),
-			true
+		$issuer = ! empty( $this->issuer )
+			? $this->issuer
+			: $this->get_issuer_from_endpoint( $this->endpoint_login );
+
+		$jwt_validator = new OpenID_Connect_Infomaniak_JWT_Validator(
+			$this->endpoint_jwks,
+			$this->client_id,
+			$issuer,
+			$this->jwks_cache_ttl,
+			$this->allow_internal_idp,
+			$this->logger
 		);
 
-		return $id_token_claim;
+		$claims = $jwt_validator->verify_and_decode_jwt( $jwt );
+
+		if ( is_wp_error( $claims ) ) {
+			$this->logger->log( $claims, 'aggregated-jwt-verification-failed' );
+			return $claims;
+		}
+
+		return $claims;
 	}
 
 	/**
 	 * Ensure the id_token_claim contains the required values.
 	 *
-	 * @param array $id_token_claim The ID token claim.
+	 * @param array  $id_token_claim The ID token claim.
+	 * @param string $expected_nonce Optional. The expected nonce from the auth request.
 	 *
 	 * @return bool|WP_Error
 	 */
-	public function validate_id_token_claim( $id_token_claim ) {
+	public function validate_id_token_claim( $id_token_claim, $expected_nonce = '' ) {
 		if ( ! is_array( $id_token_claim ) ) {
 			return new WP_Error( 'bad-id-token-claim', __( 'Bad ID token claim.', 'infomaniak-connect-openid' ), $id_token_claim );
 		}
@@ -694,6 +795,17 @@ class OpenID_Connect_Infomaniak_Client {
 					__( 'Token issuer does not match expected issuer.', 'infomaniak-connect-openid' ),
 					$id_token_claim
 				);
+			}
+		}
+
+		// Validate nonce when one was sent in the auth request.
+		if ( ! empty( $expected_nonce ) ) {
+			if ( ! isset( $id_token_claim['nonce'] ) ) {
+				return new WP_Error( 'missing-nonce', __( 'Token missing nonce claim.', 'infomaniak-connect-openid' ), $id_token_claim );
+			}
+
+			if ( $id_token_claim['nonce'] !== $expected_nonce ) {
+				return new WP_Error( 'invalid-nonce', __( 'Token nonce does not match expected value.', 'infomaniak-connect-openid' ), $id_token_claim );
 			}
 		}
 

@@ -235,10 +235,13 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
     }
 
     /**
-     * Test get_id_token_claim with valid token
+     * Test get_id_token_claim refuses to proceed when JWKS endpoint is not configured.
+     *
+     * Regression test for legacy JWT decoding fallback
+     * without signature verification must return a WP_Error instead of silently
+     * accepting an unsigned token.
      */
-    public function test_get_id_token_claim() {
-        // Create a test token with a sub claim
+    public function test_get_id_token_claim_without_jwks_returns_error() {
         $header = base64_encode(json_encode(['typ' => 'JWT', 'alg' => 'RS256']));
         $payload = base64_encode(json_encode([
             'sub' => '1234567890',
@@ -247,16 +250,15 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
         ]));
         $signature = 'test-signature';
         $token = "$header.$payload.$signature";
-        
+
         $token_response = [
             'id_token' => $token,
             'token_type' => 'Bearer'
         ];
-        
+
         $result = $this->client->get_id_token_claim($token_response);
-        $this->assertIsArray($result);
-        $this->assertEquals('1234567890', $result['sub']);
-        $this->assertEquals('Test User', $result['name']);
+        $this->assertWPError($result);
+        $this->assertEquals('jwks-not-configured', $result->get_error_code());
     }
 
     /**
@@ -294,17 +296,187 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
      */
     public function test_new_state_and_check_state() {
         $redirect_to = 'https://example.com/wp-admin/';
-        
+
         // Generate a new state
         $state = $this->client->new_state($redirect_to);
         $this->assertNotEmpty($state);
-        
+
         // Check that the state is valid
         $result = $this->client->check_state($state);
         $this->assertTrue($result);
-        
+
         // Check that a random state is not valid
         $result = $this->client->check_state('invalid-state');
         $this->assertFalse($result);
+    }
+
+    /**
+     * Test that new_state stores a PKCE code_verifier in the state transient.
+     */
+    public function test_new_state_stores_code_verifier() {
+        $state = $this->client->new_state('https://example.com/redirect');
+
+        $state_object = get_transient('infomaniak-connect-openid-state--' . $state);
+        $this->assertIsArray($state_object);
+        $this->assertArrayHasKey($state, $state_object);
+        $this->assertArrayHasKey('code_verifier', $state_object[$state]);
+        $this->assertNotEmpty($state_object[$state]['code_verifier']);
+    }
+
+    /**
+     * Test that new_state stores a nonce in the state transient.
+     */
+    public function test_new_state_stores_nonce() {
+        $state = $this->client->new_state('https://example.com/redirect');
+
+        $state_object = get_transient('infomaniak-connect-openid-state--' . $state);
+        $this->assertIsArray($state_object);
+        $this->assertArrayHasKey($state, $state_object);
+        $this->assertArrayHasKey('nonce', $state_object[$state]);
+        $this->assertNotEmpty($state_object[$state]['nonce']);
+    }
+
+    /**
+     * Test that get_nonce retrieves the nonce stored with the state.
+     */
+    public function test_get_nonce_returns_stored_nonce() {
+        $state = $this->client->new_state('https://example.com/redirect');
+        $state_object = get_transient('infomaniak-connect-openid-state--' . $state);
+        $stored_nonce = $state_object[$state]['nonce'];
+
+        $this->assertEquals($stored_nonce, $this->client->get_nonce($state));
+    }
+
+    /**
+     * Test that get_nonce returns false for an unknown state.
+     */
+    public function test_get_nonce_unknown_state_returns_false() {
+        $this->assertFalse($this->client->get_nonce('nonexistent-state'));
+    }
+
+    /**
+     * Test that validate_id_token_claim rejects a mismatched nonce.
+     */
+    public function test_validate_id_token_claim_rejects_mismatched_nonce() {
+        $state = $this->client->new_state('https://example.com/redirect');
+        $expected_nonce = $this->client->get_nonce($state);
+
+        $id_token_claim = [
+            'sub' => '1234567890',
+            'exp' => time() + 3600,
+            'iat' => time(),
+            'aud' => $this->config['client_id'],
+            'iss' => 'https://login.example.com',
+            'nonce' => 'wrong-nonce-value',
+        ];
+
+        $result = $this->client->validate_id_token_claim($id_token_claim, $expected_nonce);
+        $this->assertWPError($result);
+        $this->assertEquals('invalid-nonce', $result->get_error_code());
+    }
+
+    /**
+     * Test that validate_id_token_claim accepts a matching nonce.
+     */
+    public function test_validate_id_token_claim_accepts_matching_nonce() {
+        $state = $this->client->new_state('https://example.com/redirect');
+        $expected_nonce = $this->client->get_nonce($state);
+
+        $id_token_claim = [
+            'sub' => '1234567890',
+            'exp' => time() + 3600,
+            'iat' => time(),
+            'aud' => $this->config['client_id'],
+            'iss' => 'https://login.example.com',
+            'nonce' => $expected_nonce,
+        ];
+
+        $result = $this->client->validate_id_token_claim($id_token_claim, $expected_nonce);
+        $this->assertTrue($result);
+    }
+
+    /**
+     * Test that get_code_verifier retrieves the code_verifier stored with the state.
+     */
+    public function test_get_code_verifier_returns_stored_verifier() {
+        $state = $this->client->new_state('https://example.com/redirect');
+        $state_object = get_transient('infomaniak-connect-openid-state--' . $state);
+        $stored_verifier = $state_object[$state]['code_verifier'];
+
+        $this->assertEquals($stored_verifier, $this->client->get_code_verifier($state));
+    }
+
+    /**
+     * Test that get_code_verifier returns false for an unknown state.
+     */
+    public function test_get_code_verifier_unknown_state_returns_false() {
+        $this->assertFalse($this->client->get_code_verifier('nonexistent-state'));
+    }
+
+    /**
+     * Test that generate_code_challenge produces a base64url-encoded SHA256 hash
+     * of the code_verifier, with no padding characters.
+     */
+    public function test_generate_code_challenge() {
+        $verifier = 'test-verifier-string-1234567890';
+        $expected = rtrim(strtr(base64_encode(hash('sha256', $verifier, true)), '+/', '-_'), '=');
+
+        $this->assertEquals($expected, $this->client->generate_code_challenge($verifier));
+    }
+
+    /**
+     * Test that request_authentication_token sends the code_verifier when provided.
+     */
+    public function test_request_authentication_token_sends_code_verifier() {
+        $code = 'test-authorization-code';
+        $code_verifier = 'test-code-verifier';
+
+        $captured_body = null;
+        add_filter('pre_http_request', function ($result, $args, $url) use (&$captured_body) {
+            $captured_body = isset($args['body']) ? $args['body'] : null;
+            return array(
+                'response' => array('code' => 200),
+                'body' => json_encode(array(
+                    'id_token' => 'test-id-token',
+                    'token_type' => 'Bearer',
+                    'access_token' => 'test-access-token',
+                )),
+            );
+        }, 10, 3);
+
+        $this->client->request_authentication_token($code, $code_verifier);
+
+        $this->assertNotNull($captured_body, 'An HTTP request should have been made');
+        $this->assertArrayHasKey('code_verifier', $captured_body);
+        $this->assertEquals($code_verifier, $captured_body['code_verifier']);
+
+        remove_all_filters('pre_http_request');
+    }
+
+    /**
+     * Test that request_authentication_token omits the code_verifier when not provided.
+     */
+    public function test_request_authentication_token_omits_code_verifier_when_empty() {
+        $code = 'test-authorization-code';
+
+        $captured_body = null;
+        add_filter('pre_http_request', function ($result, $args, $url) use (&$captured_body) {
+            $captured_body = isset($args['body']) ? $args['body'] : null;
+            return array(
+                'response' => array('code' => 200),
+                'body' => json_encode(array(
+                    'id_token' => 'test-id-token',
+                    'token_type' => 'Bearer',
+                    'access_token' => 'test-access-token',
+                )),
+            );
+        }, 10, 3);
+
+        $this->client->request_authentication_token($code, '');
+
+        $this->assertNotNull($captured_body, 'An HTTP request should have been made');
+        $this->assertArrayNotHasKey('code_verifier', $captured_body);
+
+        remove_all_filters('pre_http_request');
     }
 }

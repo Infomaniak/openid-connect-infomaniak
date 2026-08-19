@@ -226,21 +226,42 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$separator = '&';
 		}
 
-		$url_format = '%1$s%2$sresponse_type=code&scope=%3$s&client_id=%4$s&state=%5$s&redirect_uri=%6$s';
-		if ( ! empty( $atts['acr_values'] ) ) {
-			$url_format .= '&acr_values=%7$s';
+		// Generate the state (stores redirect_to, code_verifier, and nonce).
+		$state = $this->client->new_state( $atts['redirect_to'] );
+
+		// Compute the PKCE code_challenge from the stored code_verifier.
+		$code_verifier = $this->client->get_code_verifier( $state );
+		$code_challenge = $code_verifier ? $this->client->generate_code_challenge( $code_verifier ) : '';
+
+		// Retrieve the nonce stored with the state.
+		$nonce = $this->client->get_nonce( $state );
+		if ( ! is_string( $nonce ) ) {
+			$nonce = '';
 		}
 
-		$url = sprintf(
-			$url_format,
+		$url_format = '%1$s%2$sresponse_type=code&scope=%3$s&client_id=%4$s&state=%5$s&redirect_uri=%6$s&nonce=%7$s';
+		$args = array(
 			$atts['endpoint_login'],
 			$separator,
 			rawurlencode( $atts['scope'] ),
 			rawurlencode( $atts['client_id'] ),
-			$this->client->new_state( $atts['redirect_to'] ),
+			$state,
 			rawurlencode( $atts['redirect_uri'] ),
-			rawurlencode( $atts['acr_values'] )
+			rawurlencode( $nonce ),
 		);
+
+		if ( ! empty( $code_challenge ) ) {
+			$url_format .= '&code_challenge=%8$s&code_challenge_method=S256';
+			$args[] = rawurlencode( $code_challenge );
+		}
+
+		if ( ! empty( $atts['acr_values'] ) ) {
+			$acr_position = empty( $code_challenge ) ? 8 : 9;
+			$url_format .= '&acr_values=%' . $acr_position . '$s';
+			$args[] = rawurlencode( $atts['acr_values'] );
+		}
+
+		$url = sprintf( $url_format, ...$args );
 
 		$url = apply_filters( 'infomaniak-connect-openid-auth-url', $url );
 		$url = esc_url_raw( $url );
@@ -462,7 +483,8 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		}
 
 		// Attempting to exchange an authorization code for an authentication token.
-		$token_result = $client->request_authentication_token( $code );
+		$code_verifier = $client->get_code_verifier( $state );
+		$token_result = $client->request_authentication_token( $code, $code_verifier );
 
 		if ( is_wp_error( $token_result ) ) {
 			$this->error_redirect( $token_result );
@@ -500,7 +522,8 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		}
 
 		// Validate our id_token has required values.
-		$valid = $client->validate_id_token_claim( $id_token_claim );
+		$expected_nonce = $client->get_nonce( $state );
+		$valid = $client->validate_id_token_claim( $id_token_claim, $expected_nonce );
 
 		if ( is_wp_error( $valid ) ) {
 			$this->error_redirect( $valid );
@@ -863,6 +886,10 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 	 * Checks if $claimname is in the body or _claim_names of the userinfo.
 	 * If yes, returns the claim value. Otherwise, returns false.
 	 *
+	 * Aggregated claim JWTs are signature-verified via JWKS before their
+	 * claims are used. If JWKS is not configured or verification fails, the
+	 * claim is rejected.
+	 *
 	 * @param string $claimname the claim name to look for.
 	 * @param array  $userinfo the JSON to look in.
 	 * @param string $claimvalue the source claim value ( from the body of the JWT of the claim source).
@@ -903,34 +930,18 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		if ( ! array_key_exists( 'JWT', $src ) ) {
 			return false;
 		}
-		/**
-		 * Extract claim from JWT.
-		 * FIXME: We probably want to verify the JWT signature/issuer here.
-		 * For example, using JWKS if applicable. For symmetrically signed
-		 * JWTs (HMAC), we need a way to specify the acceptable secrets
-		 * and each possible issuer in the config.
-		 */
 		$jwt = $src['JWT'];
 
-		// Legacy JWT decoding without signature verification (INSECURE).
-		$this->logger->log(
-			'SECURITY WARNING: Aggregated claim JWT signatures are NOT being verified. This is a potential security vulnerability.',
-			'aggregated-jwt-not-verified'
-		);
+		// Verify the aggregated claim JWT signature and issuer via JWKS.
+		$claims = $this->client->verify_and_decode_jwt( $jwt );
+		if ( is_wp_error( $claims ) ) {
+			return false;
+		}
 
-		list ( $header, $body, $rest ) = explode( '.', $jwt, 3 );
-		$body_str = base64_decode( $body, false );
-		if ( ! $body_str ) {
+		if ( ! array_key_exists( $claimname, $claims ) ) {
 			return false;
 		}
-		$body_json = json_decode( $body_str, true );
-		if ( ! isset( $body_json ) ) {
-			return false;
-		}
-		if ( ! array_key_exists( $claimname, $body_json ) ) {
-			return false;
-		}
-		$claimvalue = $body_json[ $claimname ];
+		$claimvalue = $claims[ $claimname ];
 		return true;
 	}
 

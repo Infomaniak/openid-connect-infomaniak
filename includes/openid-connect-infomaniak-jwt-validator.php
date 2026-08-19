@@ -351,13 +351,63 @@ class OpenID_Connect_Infomaniak_JWT_Validator {
 	}
 
 	/**
-	 * Validate and verify an ID token.
+	 * Verify a JWT signature using JWKS and decode its payload.
 	 *
-	 * @param string $id_token The JWT ID token to validate.
+	 * Performs cryptographic signature verification using the configured JWKS
+	 * endpoint and validates the issuer claim when an issuer is configured.
+	 * Unlike validate_id_token(), this does not enforce ID token-specific
+	 * claims (aud, exp, iat, sub), making it suitable for aggregated claim
+	 * JWTs which are containers for arbitrary claims rather than ID tokens.
 	 *
+	 * @param string $jwt The JWT to verify and decode.
 	 * @return array|WP_Error Array of claims if valid, WP_Error on failure.
 	 */
-	public function validate_id_token( $id_token ) {
+	public function verify_and_decode_jwt( $jwt ) {
+		$claims = $this->verify_signature( $jwt );
+		if ( is_wp_error( $claims ) ) {
+			return $claims;
+		}
+
+		if ( ! empty( $this->issuer ) ) {
+			if ( ! isset( $claims['iss'] ) ) {
+				$error = new WP_Error(
+					'missing-iss',
+					__( 'Token missing issuer claim.', 'infomaniak-connect-openid' )
+				);
+				$this->logger->log( $error, 'jwt-claims-invalid' );
+				return $error;
+			}
+
+			if ( rtrim( $claims['iss'], '/' ) !== rtrim( $this->issuer, '/' ) ) {
+				$this->logger->log(
+					sprintf(
+						'Issuer mismatch - Expected: "%s", Received: "%s".',
+						$this->issuer,
+						$claims['iss']
+					),
+					'issuer-mismatch'
+				);
+				$error = new WP_Error(
+					'invalid-iss',
+					__( 'Token issuer does not match expected issuer.', 'infomaniak-connect-openid' )
+				);
+				return $error;
+			}
+		}
+
+		return $claims;
+	}
+
+	/**
+	 * Verify a JWT signature using JWKS and return the decoded claims.
+	 *
+	 * Shared signature verification logic used by both validate_id_token()
+	 * and verify_and_decode_jwt(). Does not perform claim validation.
+	 *
+	 * @param string $jwt The JWT to verify.
+	 * @return array|WP_Error Array of claims if signature is valid, WP_Error on failure.
+	 */
+	private function verify_signature( $jwt ) {
 		if ( empty( $this->jwks_uri ) ) {
 			$error = new WP_Error(
 				'jwks-not-configured',
@@ -367,7 +417,7 @@ class OpenID_Connect_Infomaniak_JWT_Validator {
 			return $error;
 		}
 
-		$parts = explode( '.', $id_token );
+		$parts = explode( '.', $jwt );
 		if ( count( $parts ) !== 3 ) {
 			return new WP_Error(
 				'invalid-jwt-structure',
@@ -458,7 +508,11 @@ class OpenID_Connect_Infomaniak_JWT_Validator {
 
 		$result = openssl_verify( $signing_input, $signature, $public_key, $algo );
 
-		openssl_free_key( $public_key );
+		if ( PHP_MAJOR_VERSION < 8 ) {
+			openssl_free_key( $public_key );
+		} else {
+			unset( $public_key );
+		}
 
 		if ( $result !== 1 ) {
 			$error_msg = $result === 0
@@ -481,6 +535,22 @@ class OpenID_Connect_Infomaniak_JWT_Validator {
 				'invalid-jwt-claims',
 				__( 'Invalid JWT claims.', 'infomaniak-connect-openid' )
 			);
+		}
+
+		return $claims;
+	}
+
+	/**
+	 * Validate and verify an ID token.
+	 *
+	 * @param string $id_token The JWT ID token to validate.
+	 *
+	 * @return array|WP_Error Array of claims if valid, WP_Error on failure.
+	 */
+	public function validate_id_token( $id_token ) {
+		$claims = $this->verify_signature( $id_token );
+		if ( is_wp_error( $claims ) ) {
+			return $claims;
 		}
 
 		$claims_valid = $this->validate_jwt_claims( $claims );
