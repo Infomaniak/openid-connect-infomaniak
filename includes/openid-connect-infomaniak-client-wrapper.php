@@ -239,23 +239,29 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$nonce = '';
 		}
 
-		$url_format = '%1$s%2$sresponse_type=code&scope=%3$s&client_id=%4$s&state=%5$s&redirect_uri=%6$s&code_challenge=%7$s&code_challenge_method=S256&nonce=%8$s';
-		if ( ! empty( $atts['acr_values'] ) ) {
-			$url_format .= '&acr_values=%9$s';
-		}
-
-		$url = sprintf(
-			$url_format,
+		$url_format = '%1$s%2$sresponse_type=code&scope=%3$s&client_id=%4$s&state=%5$s&redirect_uri=%6$s&nonce=%7$s';
+		$args = array(
 			$atts['endpoint_login'],
 			$separator,
 			rawurlencode( $atts['scope'] ),
 			rawurlencode( $atts['client_id'] ),
 			$state,
 			rawurlencode( $atts['redirect_uri'] ),
-			rawurlencode( $code_challenge ),
 			rawurlencode( $nonce ),
-			rawurlencode( $atts['acr_values'] )
 		);
+
+		if ( ! empty( $code_challenge ) ) {
+			$url_format .= '&code_challenge=%8$s&code_challenge_method=S256';
+			$args[] = rawurlencode( $code_challenge );
+		}
+
+		if ( ! empty( $atts['acr_values'] ) ) {
+			$acr_position = empty( $code_challenge ) ? 8 : 9;
+			$url_format .= '&acr_values=%' . $acr_position . '$s';
+			$args[] = rawurlencode( $atts['acr_values'] );
+		}
+
+		$url = sprintf( $url_format, ...$args );
 
 		$url = apply_filters( 'infomaniak-connect-openid-auth-url', $url );
 		$url = esc_url_raw( $url );

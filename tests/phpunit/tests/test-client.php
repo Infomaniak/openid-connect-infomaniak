@@ -431,36 +431,52 @@ class Test_OpenID_Connect_Infomaniak_Client extends Infomaniak_OpenID_Connect_Te
         $code = 'test-authorization-code';
         $code_verifier = 'test-code-verifier';
 
-        add_filter('infomaniak-connect-openid-alter-request', function ($request, $operation) use ($code_verifier) {
-            if ($operation === 'get-authentication-token') {
-                if (! isset($request['body'])) {
-                    $request['body'] = array();
-                }
-                $request['body']['code_verifier'] = $code_verifier;
-            }
-            return $request;
-        });
+        $captured_body = null;
+        add_filter('pre_http_request', function ($result, $args, $url) use (&$captured_body) {
+            $captured_body = isset($args['body']) ? $args['body'] : null;
+            return array(
+                'response' => array('code' => 200),
+                'body' => json_encode(array(
+                    'id_token' => 'test-id-token',
+                    'token_type' => 'Bearer',
+                    'access_token' => 'test-access-token',
+                )),
+            );
+        }, 10, 3);
 
-        $reflection = new ReflectionClass($this->client);
-        $method = $reflection->getMethod('http_post');
-        $method->setAccessible(true);
+        $this->client->request_authentication_token($code, $code_verifier);
 
-        $request = array(
-            'body' => array(
-                'code'          => $code,
-                'client_id'     => $this->config['client_id'],
-                'client_secret' => $this->config['client_secret'],
-                'redirect_uri'  => $this->config['redirect_uri'],
-                'grant_type'    => 'authorization_code',
-                'scope'         => $this->config['scope'],
-                'code_verifier' => $code_verifier,
-            ),
-            'headers' => array('Host' => 'login.example.com'),
-        );
+        $this->assertNotNull($captured_body, 'An HTTP request should have been made');
+        $this->assertArrayHasKey('code_verifier', $captured_body);
+        $this->assertEquals($code_verifier, $captured_body['code_verifier']);
 
-        $this->assertArrayHasKey('code_verifier', $request['body']);
-        $this->assertEquals($code_verifier, $request['body']['code_verifier']);
+        remove_all_filters('pre_http_request');
+    }
 
-        remove_all_filters('infomaniak-connect-openid-alter-request');
+    /**
+     * Test that request_authentication_token omits the code_verifier when not provided.
+     */
+    public function test_request_authentication_token_omits_code_verifier_when_empty() {
+        $code = 'test-authorization-code';
+
+        $captured_body = null;
+        add_filter('pre_http_request', function ($result, $args, $url) use (&$captured_body) {
+            $captured_body = isset($args['body']) ? $args['body'] : null;
+            return array(
+                'response' => array('code' => 200),
+                'body' => json_encode(array(
+                    'id_token' => 'test-id-token',
+                    'token_type' => 'Bearer',
+                    'access_token' => 'test-access-token',
+                )),
+            );
+        }, 10, 3);
+
+        $this->client->request_authentication_token($code, '');
+
+        $this->assertNotNull($captured_body, 'An HTTP request should have been made');
+        $this->assertArrayNotHasKey('code_verifier', $captured_body);
+
+        remove_all_filters('pre_http_request');
     }
 }

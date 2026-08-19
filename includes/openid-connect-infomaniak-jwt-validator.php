@@ -508,7 +508,11 @@ class OpenID_Connect_Infomaniak_JWT_Validator {
 
 		$result = openssl_verify( $signing_input, $signature, $public_key, $algo );
 
-		openssl_free_key( $public_key );
+		if ( PHP_MAJOR_VERSION < 8 ) {
+			openssl_free_key( $public_key );
+		} else {
+			unset( $public_key );
+		}
 
 		if ( $result !== 1 ) {
 			$error_msg = $result === 0
