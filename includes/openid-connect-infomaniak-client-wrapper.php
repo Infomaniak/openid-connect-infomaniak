@@ -319,7 +319,7 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 			$this->error_redirect( $token_response );
 		}
 
-		update_user_meta( $user_id, 'infomaniak-connect-openid-last-token-response', $token_response );
+		$this->store_token_response( $user_id, $token_response );
 		$this->save_refresh_token( $manager, $token, $token_response );
 	}
 
@@ -692,11 +692,33 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		}
 
 		// Store the tokens for future reference.
-		update_user_meta( $user->ID, 'infomaniak-connect-openid-last-token-response', $token_response );
+		$this->store_token_response( $user->ID, $token_response );
 		update_user_meta( $user->ID, 'infomaniak-connect-openid-last-id-token-claim', $id_token_claim );
 		update_user_meta( $user->ID, 'infomaniak-connect-openid-last-user-claim', $user_claim );
 
 		return $user_claim;
+	}
+
+	/**
+	 * Store the token response in user meta without sensitive values.
+	 *
+	 * Only the id_token is kept (required for the logout end_session endpoint).
+	 * access_token and refresh_token are stripped to prevent token theft on
+	 * database compromise (security finding H6).
+	 *
+	 * @param int   $user_id        The WordPress user ID.
+	 * @param array $token_response The token response from the IDP.
+	 *
+	 * @return void
+	 */
+	public function store_token_response( $user_id, $token_response ) {
+		$safe = array();
+
+		if ( isset( $token_response['id_token'] ) ) {
+			$safe['id_token'] = $token_response['id_token'];
+		}
+
+		update_user_meta( $user_id, 'infomaniak-connect-openid-last-token-response', $safe );
 	}
 
 	/**
@@ -712,7 +734,7 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 	 */
 	public function login_user( $user, $token_response, $id_token_claim, $user_claim, $subject_identity ) {
 		// Store the tokens for future reference.
-		update_user_meta( $user->ID, 'infomaniak-connect-openid-last-token-response', $token_response );
+		$this->store_token_response( $user->ID, $token_response );
 		update_user_meta( $user->ID, 'infomaniak-connect-openid-last-id-token-claim', $id_token_claim );
 		update_user_meta( $user->ID, 'infomaniak-connect-openid-last-user-claim', $user_claim );
 		// Allow plugins / themes to take action using current claims on existing user (e.g. update role).

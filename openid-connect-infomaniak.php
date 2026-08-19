@@ -60,7 +60,7 @@ Notes
   - infomaniak-connect-openid-subject-identity    - the identity of the user provided by the idp
   - infomaniak-connect-openid-last-id-token-claim - the user's most recent id_token claim, decoded
   - infomaniak-connect-openid-last-user-claim     - the user's most recent user_claim
-  - infomaniak-connect-openid-last-token-response - the user's most recent token response
+  - infomaniak-connect-openid-last-token-response - the user's most recent id_token (only; access_token and refresh_token are stripped for security)
 
   Options
   - openid_connect_generic_settings     - plugin settings
