@@ -23,7 +23,7 @@ class Test_Main_Class extends Infomaniak_OpenID_Connect_TestCase {
     public function test_constants() {
         $this->assertTrue(defined('INFOMANIAK_OIDC_ENDPOINT_LOGIN_URL'));
         $this->assertTrue(defined('INFOMANIAK_OIDC_ENDPOINT_USERINFO_URL'));
-        $this->assertEquals('1.0.4', OpenID_Connect_Infomaniak::VERSION);
+        $this->assertEquals('1.0.5', OpenID_Connect_Infomaniak::VERSION);
     }
 
     /**
