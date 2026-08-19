@@ -50,3 +50,6 @@ Thumbs.db
 
 vendor
 .phpunit.result.cache
+
+# Git worktrees
+.worktrees/
