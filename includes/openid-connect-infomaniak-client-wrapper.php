@@ -49,15 +49,6 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 	private $cookie_token_refresh_key = 'infomaniak-connect-openid-refresh';
 
 	/**
-	 * The user redirect cookie key.
-	 *
-	 * @deprecated Redirection should be done via state transient and not cookies.
-	 *
-	 * @var string
-	 */
-	public $cookie_redirect_key = 'infomaniak-connect-openid-redirect';
-
-	/**
 	 * The return error onject.
 	 *
 	 * @example WP_Error if there was a problem, or false if no error
@@ -344,7 +335,7 @@ class OpenID_Connect_Infomaniak_Client_Wrapper {
 		$this->logger->log( $error );
 
 		// Redirect user back to login page.
-		wp_redirect(
+		wp_safe_redirect(
 			wp_login_url() .
 			'?login-error=' . $error->get_error_code() .
 			'&message=' . urlencode( $error->get_error_message() )
